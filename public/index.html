@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css" />
+    <title>Document</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        #connect-ctn {
+            padding: 1rem;
+        }
+
+        #spatial-map {
+            display: none;
+            position: relative;
+            height: 100vh;
+        }
+
+        #map {
+            margin: 0 auto;
+            width: 100px;
+            height: 100px;
+        }
+
+        .tools {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            margin: 0.5rem;
+        }
+
+        .tools button {
+            width: 32px;
+            height: 32px;
+        }
+    </style>
+</head>
+
+<body>
+    <section id="connect-ctn">
+        <div>
+            <div class="form-group">
+                <label for="connect-string">Connection String</label>
+                <input class="form-control" type="text" name="connect-string" value="localhost/xe" />
+            </div>
+            <div class="form-group">
+                <label for="user">User</label>
+                <input class="form-control" type="text" name="user" value="system" />
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input class="form-control" type="text" name="password" value="system" />
+            </div>
+            <div class="form-group">
+                <label for="table-name">Table Name</label>
+                <input class="form-control" type="text" name="table-name" value="spatial" />
+            </div>
+            <div class="form-group">
+                <label for="spatial-column-name">Spatial Column Name</label>
+                <input class="form-control" type="text" name="spatial-column-name" value="location" />
+            </div>
+            <button class="btn btn-primary btn-block">Show Spatial Map</button>
+        </div>
+    </section>
+    <section id="spatial-map">
+        <div id="map"></div>
+        <div class="tools">
+            <button title="Reset Axes">
+                <img src="https://img.icons8.com/material-rounded/24/000000/coordinate-system.png"></img>
+            </button>
+        </div>
+    </section>
+    <script src="https://kit.fontawesome.com/577845f6a5.js" crossorigin="anonymous"></script>
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.14.0.min.js"></script>
+    <script>
+        const imgLoader = `<img src="https://i.gifer.com/ZZ5H.gif" width="24px" />`;
+        const connect = {
+            name: "connect",
+            data: { connectString: "", user: "", password: "", tableName: "", spatialColumnName: "" },
+            start: function () {
+                connect.ctn.style.display = "block";
+            },
+            destroy: function () {
+                connect.ctn.style.display = "none";
+            },
+            ctn: document.querySelector("#connect-ctn"),
+            connectString: document.getElementsByName("connect-string")[0],
+            user: document.getElementsByName("user")[0],
+            password: document.getElementsByName("password")[0],
+            tableName: document.getElementsByName("table-name")[0],
+            spatialColumnName: document.getElementsByName("spatial-column-name")[0],
+            showMapBtn: document.querySelector("#connect-ctn button")
+        }
+
+        connect.showMapBtn.addEventListener("click", async function (e) {
+            connect.showMapBtn.innerHTML = imgLoader;
+            connect.data.connectString = connect.connectString.value;
+            connect.data.user = connect.user.value;
+            connect.data.password = connect.password.value;
+            connect.data.tableName = connect.tableName.value;
+            connect.data.spatialColumnName = connect.spatialColumnName.value;
+            fetchSpatialData(connect.data)
+                .then(res => {
+                    connect.showMapBtn.innerHTML = "Show Spatial Map";
+                    if (res.errorNum) return alert("Please check all the fields");
+                    connect.destroy();
+                    spatialMap.start(res);
+                }).catch(err => {
+                    console.log(err);
+                    connect.showMapBtn.innerHTML = "Show Spatial Map";
+                    alert("Please check all the fields");
+                });
+        });
+
+        async function fetchSpatialData(connectionData) {
+            const res = await fetch("http://localhost:5000/spatial-data", {
+                method: "post", headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(connectionData)
+            });
+            return res.json();
+        }
+
+        const spatialMap = {
+            name: "spatial-map",
+            shapes: [], xMax: 0, yMax: 0,
+            plotlyOption: { responsive: true, scrollZoom: true },
+            start: function (tableData) {
+                spatialMap.draw(tableData);
+                spatialMap.ctn.style.display = "block";
+                setInterval(async () => {
+                    fetchSpatialData(connect.data)
+                        .then(res => {
+                            spatialMap.draw(res);
+                        }).catch(err => {
+                            console.log(err);
+                        });
+                }, 10000);
+                window.dispatchEvent(new Event("resize"));
+                spatialMap.resetBtn.dispatchEvent(new Event("click"));
+            },
+            draw: function (tableData) {
+                spatialMap.shapes = [];
+                let xMax = 0, yMax = 0;
+                tableData.rows.forEach(row => {
+                    const sdo = row[connect.data.spatialColumnName.toUpperCase()];
+                    const elem_info = sdo["SDO_ELEM_INFO"];
+                    const ordinate_arr = sdo["SDO_ORDINATES"];
+                    if (elem_info[2] === 3) {
+                        const square = createSquareShape(ordinate_arr);
+                        xMax = Math.max(xMax, square.xMax);
+                        yMax = Math.max(yMax, square.yMax);
+                        spatialMap.shapes.push(square);
+                    } else if (elem_info[2] === 1) {
+                        const polygon = createPolygonShape(ordinate_arr);
+                        xMax = Math.max(xMax, polygon.xMax);
+                        yMax = Math.max(yMax, polygon.yMax);
+                        spatialMap.shapes.push(polygon);
+                    } else if (elem_info[2] === 4) {
+                        const circle = createCircleShape(ordinate_arr);
+                        xMax = Math.max(xMax, circle.xMax);
+                        yMax = Math.max(yMax, circle.yMax);
+                        spatialMap.shapes.push(circle);
+                    }
+                });
+                spatialMap.xMax = xMax; spatialMap.yMax = yMax;
+                Plotly.update(spatialMap.map, [], {
+                    shapes: spatialMap.shapes
+                });
+            },
+            destroy: function () {
+                spatialMap.ctn.style.display = "none";
+            },
+            ctn: document.querySelector("#spatial-map"),
+            map: document.querySelector("#map"),
+            resetBtn: document.querySelector("#spatial-map button")
+        }
+
+        Plotly.newPlot(spatialMap.map, [], {
+            dragmode: "pan",
+            shapes: spatialMap.shapes
+        }, spatialMap.plotlyOption);
+
+        spatialMap.resetBtn.addEventListener("click", function (e) {
+            Plotly.update(spatialMap.map, [], {
+                xaxis: { range: [0, spatialMap.xMax + 2] },
+                yaxis: { range: [0, spatialMap.yMax + 2] },
+                shapes: spatialMap.shapes
+            });
+        });
+
+        function createSquareShape(ordinates_array) {
+
+            return {
+                type: "rect",
+                x0: ordinates_array[0],
+                y0: ordinates_array[1],
+                x1: ordinates_array[2],
+                y1: ordinates_array[3],
+                xMax: Math.max(ordinates_array[0], ordinates_array[2]),
+                yMax: Math.max(ordinates_array[1], ordinates_array[2]),
+                line: {
+                    color: "rgba(0,0,0,1)"
+                }
+            }
+        }
+
+        function createPolygonShape(ordinates_array = [1, 1, 2, 2, 4, 5, 3, 5, 1, 1]) {
+            let xMax = 0, yMax = 0;
+            let path = ["M", ordinates_array[0], ordinates_array[1]];
+            xMax = Math.max(xMax, ordinates_array[0]);
+            yMax = Math.max(yMax, ordinates_array[1]);
+            for (let i = 2; i < ordinates_array.length; i = i + 2) {
+                path.push("L");
+                path.push(ordinates_array[i]);
+                path.push(ordinates_array[i + 1]);
+                xMax = Math.max(xMax, ordinates_array[i]);
+                yMax = Math.max(yMax, ordinates_array[i + 1]);
+            }
+            return {
+                type: 'path',
+                xMax: xMax, yMax: yMax,
+                path: path.join(" "),
+                line: {
+                    color: "rgba(0,0,0,1)"
+                }
+            }
+        }
+
+        function createCircleShape(ordinates_array = [8, 7, 10, 9, 8, 11]) {
+            const circle = findCircle(ordinates_array);
+            return {
+                type: 'circle',
+                x0: circle.x - circle.radius,
+                y0: circle.y - circle.radius,
+                x1: circle.x + circle.radius,
+                y1: circle.y + circle.radius,
+                xMax: Math.max(circle.x - circle.radius, circle.x + circle.radius),
+                yMax: Math.max(circle.y - circle.radius, circle.y + circle.radius),
+                line: {
+                    color: "rgba(0,0,0,1)"
+                }
+            }
+        }
+
+        function findCircle(ordinates_array) {
+            const [x1, y1, x2, y2, x3, y3] = ordinates_array;
+            const x12 = (x1 - x2);
+            const x13 = (x1 - x3);
+
+            const y12 = (y1 - y2);
+            const y13 = (y1 - y3);
+
+            const y31 = (y3 - y1);
+            const y21 = (y2 - y1);
+
+            const x31 = (x3 - x1);
+            const x21 = (x2 - x1);
+
+            const sx13 = Math.pow(x1, 2) - Math.pow(x3, 2);
+
+            const sy13 = Math.pow(y1, 2) - Math.pow(y3, 2);
+
+            const sx21 = Math.pow(x2, 2) - Math.pow(x1, 2);
+            const sy21 = Math.pow(y2, 2) - Math.pow(y1, 2);
+
+            const f = ((sx13) * (x12)
+                + (sy13) * (x12)
+                + (sx21) * (x13)
+                + (sy21) * (x13))
+                / (2 * ((y31) * (x12) - (y21) * (x13)));
+            const g = ((sx13) * (y12)
+                + (sy13) * (y12)
+                + (sx21) * (y13)
+                + (sy21) * (y13))
+                / (2 * ((x31) * (y12) - (x21) * (y13)));
+
+            const c = -(Math.pow(x1, 2)) -
+                Math.pow(y1, 2) - 2 * g * x1 - 2 * f * y1;
+
+            const h = -g;
+            const k = -f;
+            const sqr_of_r = h * h + k * k - c;
+
+            // r is the radius
+            const r = Math.sqrt(sqr_of_r);
+            return {
+                x: h,
+                y: k,
+                radius: r
+            }
+        }
+
+
+        window.addEventListener("resize", function (e) {
+            const width = window.innerWidth || document.documentElement.clientWidth ||
+                document.body.clientWidth;
+            const height = window.innerHeight || document.documentElement.clientHeight ||
+                document.body.clientHeight;
+            const scale = Math.min(width - 1, height - 1);
+            spatialMap.map.style.width = scale + "px";
+            spatialMap.map.style.height = scale + "px";
+        });
+    </script>
+</body>
+
+</html>
